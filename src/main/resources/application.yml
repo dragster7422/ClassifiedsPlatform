@@ -1,0 +1,33 @@
+spring:
+  application:
+    name: classifieds-platform
+
+  profiles:
+    active: dev
+
+  jpa:
+    open-in-view: false
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migration
+
+  servlet:
+    multipart:
+      max-file-size: 2MB
+      max-request-size: 20MB
+
+logging:
+  level:
+    com.classifieds: DEBUG
+    org.hibernate.SQL: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%X{requestId}] %-5level %logger{36} - %msg%n"
+
+file-storage:
+  upload-dir: ./uploads/listing-images
