@@ -50,7 +50,6 @@
 ### Вимоги
 - Java 21+
 - Maven 3.6+
-- (Опціонально) PostgreSQL 14+
 
 ### Запуск в Development режимі (H2 Database)
 
@@ -58,7 +57,9 @@
 # Клонувати репозиторій
 git clone https://github.com/dragster7422/ClassifiedsPlatform.git
 cd ClassifiedsPlatform
+```
 
+```bash
 # Запустити проект
 mvn spring-boot:run -Dspring-boot.run.profiles=dev
 ```
@@ -92,6 +93,8 @@ mvn test -Dtest="*IntegrationTest"
 ```http
 POST
 http://localhost:8080/listings
+```
+```http
 Content-Type: application/json
 
 {
@@ -109,6 +112,8 @@ Response: 201 Created
 ```http
 POST
 http://localhost:8080/listings/{id}/publish
+```
+```http
 Content-Type: application/json
 Idempotency-Key: unique-key-123
 
@@ -119,8 +124,10 @@ Response: 200 OK
 ```http
 GET
 http://localhost:8080/listings?query=macbook&category=ELECTRONICS&status=PUBLISHED&page=0&size=20&sortBy=createdAt&sortDirection=desc
-
+```
+```http
 Response: 200 OK
+
 {
   "content": [...],
   "page": 0,
@@ -144,9 +151,11 @@ Response: 200 OK
 ```http
 POST
 http://localhost:8080/listings/{listingId}/photos
+```
+```http
 Content-Type: multipart/form-data
 
-file: image.jpg
+file: image.jpg .png .webp
 
 Response: 201 Created
 ```
@@ -185,7 +194,7 @@ src/main/java/com/classifieds/
 src/main/resources/
 └── db/migration/                  # Flyway migrations
     ├── V1__create_listings_table.sql
-    ├── V2__create_photos_table.sql
+    ├── V2__create_listing_photos_table.sql
     ├── V3__create_audit_log_table.sql
     └── V4__create_idempotency_table.sql
 ```
@@ -193,10 +202,10 @@ src/main/resources/
 ## 🎯 Domain-Driven Design
 
 ### Aggregates & Entities
-- **Listing** (Aggregate Root) - контролює всі бізнес-правила та переходи станів
-- **Photo** (Entity) - зв'язана з Listing
-- **AuditLog** (Entity) - логування подій
-- **IdempotencyRecord** (Entity) - ідемпотентність
+- **Listing** - контролює всі бізнес-правила та переходи станів
+- **Photo** - зв'язана з Listing
+- **AuditLog** - логування подій
+- **IdempotencyRecord** - ідемпотентність
 
 ### Value Objects
 - **Money** - amount + currency з валідацією
@@ -222,18 +231,19 @@ src/main/resources/
 ## 📊 Database Schema
 
 ```sql
-listings (id, title, description, price_amount, price_currency, category, 
-          status, created_at, updated_at, version)
+listings 
+(id, title, description, price_amount, price_currency, category, status, created_at, updated_at, version)
           
-photos (id, listing_id, filename, content_type, file_size, 
-        storage_path, created_at)
+photos
+(id, listing_id, filename, content_type, file_size, storage_path, created_at)
         
-audit_log (id, event_type, listing_id, payload_json, created_at)
+audit_log 
+(id, event_type, listing_id, payload_json, created_at)
 
-idempotency_records (id, idempotency_key, listing_id, result_json, 
-                     http_status, created_at, expires_at)
+idempotency_records 
+(id, idempotency_key, listing_id, result_json, http_status, created_at, expires_at)
 ```
 
 ## 📚 Додаткова документація
 
-- [Design Notes](DESIGN_NOTES.md) - ключові рішення та компроміси
+- [Design Notes](DESIGN_NOTES.md) - ключові рішення, компроміси та що можна покращити.
