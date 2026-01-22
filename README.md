@@ -87,6 +87,32 @@ mvn test -Dtest="*IntegrationTest"
 
 ### Протестувати "API Endpoints" ви можете через застосунок Postman
 
+---
+
+### Доступні варіанти значень для сутностей
+```java
+public enum Currency {
+    UAH,
+    USD,
+    EUR
+}
+```
+```java
+public enum Category {
+    ELECTRONICS,
+    REAL_ESTATE,
+    VEHICLES,
+    FASHION,
+    HOME_GARDEN,
+    SERVICES,
+    PETS,
+    SPORTS,
+    OTHER
+}
+```
+
+---
+
 ### Listings
 
 #### Створити оголошення
