@@ -31,19 +31,19 @@ public class ListingRepositoryAdapter implements ListingRepository {
     @Override
     public Listing save(Listing listing) {
         Optional<ListingEntity> existingEntity = jpaRepository.findById(listing.getId());
+        ListingEntity entity;
 
         if (existingEntity.isPresent()) {
             // Update existing entity
-            ListingEntity entity = existingEntity.get();
+            entity = existingEntity.get();
             mapper.updateEntity(listing, entity);
-            ListingEntity savedEntity = jpaRepository.save(entity);
-            return mapper.toDomain(savedEntity);
         } else {
             // Create new entity
-            ListingEntity entity = mapper.toEntity(listing);
-            ListingEntity savedEntity = jpaRepository.save(entity);
-            return mapper.toDomain(savedEntity);
+            entity = mapper.toEntity(listing);
         }
+
+        ListingEntity savedEntity = jpaRepository.save(entity);
+        return mapper.toDomain(savedEntity);
     }
 
     @Override

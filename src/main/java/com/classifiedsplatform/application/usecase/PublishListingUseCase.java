@@ -5,7 +5,6 @@ import com.classifiedsplatform.application.port.out.ListingRepository;
 import com.classifiedsplatform.application.service.AuditLogService;
 import com.classifiedsplatform.application.service.IdempotencyService;
 import com.classifiedsplatform.domain.event.ListingPublishedEvent;
-import com.classifiedsplatform.domain.exception.IdempotencyConflictException;
 import com.classifiedsplatform.domain.exception.ListingNotFoundException;
 import com.classifiedsplatform.domain.model.IdempotencyRecord;
 import com.classifiedsplatform.domain.model.Listing;
@@ -16,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.Optional;
+import java.util.UUID;
 
 @Service
 @Transactional
@@ -47,11 +47,11 @@ public class PublishListingUseCase {
                     idempotencyService.findByKey(command.idempotencyKey());
 
             if (existingRecord.isPresent()) {
-                log.warn("Idempotent request conflict detected for key: {}",
+                log.info("Idempotent request detected for key: {}, returning cached result",
                         command.idempotencyKey());
-                throw new IdempotencyConflictException(
-                        command.idempotencyKey(),
-                        existingRecord.get().getListingId());
+                UUID cachedListingId = existingRecord.get().getListingId();
+                return listingRepository.findById(cachedListingId)
+                        .orElseThrow(() -> new ListingNotFoundException(cachedListingId));
             }
         }
 
