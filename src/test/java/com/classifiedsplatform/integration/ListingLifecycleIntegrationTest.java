@@ -10,6 +10,7 @@ import com.classifiedsplatform.domain.model.AuditLog;
 import com.classifiedsplatform.domain.model.vo.Category;
 import com.classifiedsplatform.domain.model.vo.Currency;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.type.TypeReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -74,7 +75,7 @@ class ListingLifecycleIntegrationTest {
     }
 
     @Test
-    @DisplayName("Should complete full listing lifecycle: create -> upload photos -> publish")
+    @DisplayName("Should complete full listing lifecycle: create -> upload photos (batch) -> publish")
     void shouldCompleteFullListingLifecycle() throws Exception {
         // ========== STEP 1: Create Listing ==========
         CreateListingRequest createRequest = new CreateListingRequest(
@@ -104,62 +105,55 @@ class ListingLifecycleIntegrationTest {
 
         assertThat(listingId).isNotNull();
 
-        // ========== STEP 2: Upload First Photo ==========
+        // ========== STEP 2: Upload 3 Photos in One Batch ==========
         byte[] photoData1 = createTestImageData("photo1.jpg");
+        byte[] photoData2 = createTestImageData("photo2.jpg");
+        byte[] photoData3 = createTestImageData("photo3.jpg");
+
         MockMultipartFile photo1 = new MockMultipartFile(
-                "file",
+                "files",
                 "iphone-front.jpg",
                 "image/jpeg",
                 photoData1
         );
 
-        MvcResult photo1Result = mockMvc.perform(multipart("/listings/{listingId}/photos", listingId)
-                        .file(photo1))
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.id").exists())
-                .andExpect(jsonPath("$.filename").value("iphone-front.jpg"))
-                .andExpect(jsonPath("$.contentType").value("image/jpeg"))
-                .andExpect(jsonPath("$.size").value(photoData1.length))
-                .andReturn();
-
-        PhotoResponse photoResponse1 = objectMapper.readValue(
-                photo1Result.getResponse().getContentAsString(),
-                PhotoResponse.class
-        );
-
-        // Verify file was actually stored on disk
-        assertThat(photoResponse1.id()).isNotNull();
-
-        // ========== STEP 3: Upload Second Photo ==========
-        byte[] photoData2 = createTestImageData("photo2.jpg");
         MockMultipartFile photo2 = new MockMultipartFile(
-                "file",
+                "files",
                 "iphone-back.jpg",
                 "image/jpeg",
                 photoData2
         );
 
-        mockMvc.perform(multipart("/listings/{listingId}/photos", listingId)
-                        .file(photo2))
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.filename").value("iphone-back.jpg"));
-
-        // ========== STEP 4: Upload Third Photo ==========
-        byte[] photoData3 = createTestImageData("photo3.jpg");
         MockMultipartFile photo3 = new MockMultipartFile(
-                "file",
+                "files",
                 "iphone-box.jpg",
                 "image/png",
                 photoData3
         );
 
-        mockMvc.perform(multipart("/listings/{listingId}/photos", listingId)
+        MvcResult photosResult = mockMvc.perform(multipart("/listings/{listingId}/photos", listingId)
+                        .file(photo1)
+                        .file(photo2)
                         .file(photo3))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.filename").value("iphone-box.jpg"))
-                .andExpect(jsonPath("$.contentType").value("image/png"));
+                .andExpect(jsonPath("$").isArray())
+                .andExpect(jsonPath("$.length()").value(3))
+                .andExpect(jsonPath("$[0].id").exists())
+                .andExpect(jsonPath("$[1].id").exists())
+                .andExpect(jsonPath("$[2].id").exists())
+                .andReturn();
 
-        // ========== STEP 5: Verify Listing Has 3 Photos ==========
+        List<PhotoResponse> photoResponses = objectMapper.readValue(
+                photosResult.getResponse().getContentAsString(),
+                new TypeReference<List<PhotoResponse>>() {}
+        );
+
+        assertThat(photoResponses).hasSize(3);
+        assertThat(photoResponses)
+                .extracting(PhotoResponse::filename)
+                .containsExactlyInAnyOrder("iphone-front.jpg", "iphone-back.jpg", "iphone-box.jpg");
+
+        // ========== STEP 3: Verify Listing Has 3 Photos ==========
         MvcResult detailsResult = mockMvc.perform(get("/listings/{id}", listingId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(listingId.toString()))
@@ -177,7 +171,7 @@ class ListingLifecycleIntegrationTest {
                 .extracting(PhotoResponse::filename)
                 .containsExactlyInAnyOrder("iphone-front.jpg", "iphone-back.jpg", "iphone-box.jpg");
 
-        // ========== STEP 6: Publish Listing ==========
+        // ========== STEP 4: Publish Listing ==========
         String idempotencyKey = UUID.randomUUID().toString();
 
         mockMvc.perform(post("/listings/{id}/publish", listingId)
@@ -186,12 +180,12 @@ class ListingLifecycleIntegrationTest {
                 .andExpect(jsonPath("$.id").value(listingId.toString()))
                 .andExpect(jsonPath("$.status").value("PUBLISHED"));
 
-        // ========== STEP 7: Verify Listing is Published ==========
+        // ========== STEP 5: Verify Listing is Published ==========
         mockMvc.perform(get("/listings/{id}", listingId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("PUBLISHED"));
 
-        // ========== STEP 8: Verify Audit Logs Created ==========
+        // ========== STEP 6: Verify Audit Logs Created ==========
         List<AuditLog> auditLogs = auditLogRepository.findByListingId(listingId);
 
         assertThat(auditLogs).isNotEmpty();
@@ -209,7 +203,7 @@ class ListingLifecycleIntegrationTest {
                 .count();
         assertThat(publishedEvents).isEqualTo(1);
 
-        // ========== STEP 9: Verify Listing Appears in Published Search Results ==========
+        // ========== STEP 7: Verify Listing Appears in Published Search Results ==========
         mockMvc.perform(get("/listings")
                         .param("status", "PUBLISHED")
                         .param("category", "ELECTRONICS"))
@@ -243,20 +237,26 @@ class ListingLifecycleIntegrationTest {
         );
         UUID listingId = listingResponse.id();
 
-        // ========== Test 1: Upload 10 photos (max limit) ==========
-        for (int i = 1; i <= 10; i++) {
+        // ========== Test 1: Upload 10 photos in one batch (max limit) ==========
+        MockMultipartFile[] photos = new MockMultipartFile[10];
+        for (int i = 0; i < 10; i++) {
             byte[] photoData = createTestImageData("photo" + i + ".jpg");
-            MockMultipartFile photo = new MockMultipartFile(
-                    "file",
+            photos[i] = new MockMultipartFile(
+                    "files",
                     "photo-" + i + ".jpg",
                     "image/jpeg",
                     photoData
             );
-
-            mockMvc.perform(multipart("/listings/{listingId}/photos", listingId)
-                            .file(photo))
-                    .andExpect(status().isCreated());
         }
+
+        var requestBuilder = multipart("/listings/{listingId}/photos", listingId);
+        for (MockMultipartFile photo : photos) {
+            requestBuilder.file(photo);
+        }
+
+        mockMvc.perform(requestBuilder)
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.length()").value(10));
 
         // Verify 10 photos uploaded
         mockMvc.perform(get("/listings/{id}", listingId))
@@ -266,7 +266,7 @@ class ListingLifecycleIntegrationTest {
         // ========== Test 2: Try to upload 11th photo (should fail) ==========
         byte[] photoData11 = createTestImageData("photo11.jpg");
         MockMultipartFile photo11 = new MockMultipartFile(
-                "file",
+                "files",
                 "photo-11.jpg",
                 "image/jpeg",
                 photoData11
@@ -275,39 +275,77 @@ class ListingLifecycleIntegrationTest {
         mockMvc.perform(multipart("/listings/{listingId}/photos", listingId)
                         .file(photo11))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.message").value("Maximum number of photos (10) exceeded"));
+                .andExpect(jsonPath("$.message").value(
+                        org.hamcrest.Matchers.containsString("Cannot add 1 photo(s). Listing already has 10 photo(s) and maximum allowed is 10")));
 
-        // ========== Test 3: Try to upload invalid file type ==========
+        // ========== Test 3: Try to upload batch that exceeds limit ==========
+        UUID newListingId = createNewListing();
+
+        // Upload 8 photos first
+        var builder1 = multipart("/listings/{listingId}/photos", newListingId);
+        for (int i = 0; i < 8; i++) {
+            byte[] photoData = createTestImageData("batch1-photo" + i + ".jpg");
+            builder1.file(new MockMultipartFile("files", "batch1-photo-" + i + ".jpg", "image/jpeg", photoData));
+        }
+        mockMvc.perform(builder1).andExpect(status().isCreated());
+
+        // Try to upload 3 more (total would be 11)
+        var builder2 = multipart("/listings/{listingId}/photos", newListingId);
+        for (int i = 0; i < 3; i++) {
+            byte[] photoData = createTestImageData("batch2-photo" + i + ".jpg");
+            builder2.file(new MockMultipartFile("files", "batch2-photo-" + i + ".jpg", "image/jpeg", photoData));
+        }
+
+        mockMvc.perform(builder2)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(
+                        org.hamcrest.Matchers.containsString("Cannot add 3 photo(s). Listing already has 8 photo(s) and maximum allowed is 10")));
+
+        // ========== Test 4: Try to upload invalid file type ==========
         byte[] invalidFileData = "not an image".getBytes();
         MockMultipartFile invalidFile = new MockMultipartFile(
-                "file",
+                "files",
                 "document.pdf",
                 "application/pdf",
                 invalidFileData
         );
 
-        UUID newListingId = createNewListing();
+        UUID anotherListingId = createNewListing();
 
-        mockMvc.perform(multipart("/listings/{listingId}/photos", newListingId)
+        mockMvc.perform(multipart("/listings/{listingId}/photos", anotherListingId)
                         .file(invalidFile))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value(
                         org.hamcrest.Matchers.containsString("Invalid content type")));
 
-        // ========== Test 4: Try to upload file that's too large (>2MB) ==========
+        // ========== Test 5: Try to upload file that's too large (>2MB) ==========
         byte[] largeFileData = new byte[3 * 1024 * 1024]; // 3MB
         MockMultipartFile largeFile = new MockMultipartFile(
-                "file",
+                "files",
                 "large-photo.jpg",
                 "image/jpeg",
                 largeFileData
         );
 
-        mockMvc.perform(multipart("/listings/{listingId}/photos", newListingId)
+        mockMvc.perform(multipart("/listings/{listingId}/photos", anotherListingId)
                         .file(largeFile))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.message").value(
                         org.hamcrest.Matchers.containsString("File size exceeds maximum allowed size")));
+
+        // ========== Test 6: Try to upload more than 10 files in one request ==========
+        UUID yetAnotherListingId = createNewListing();
+
+        var builder3 = multipart("/listings/{listingId}/photos", yetAnotherListingId);
+        for (int i = 0; i < 11; i++) {
+            byte[] photoData = createTestImageData("many-photo" + i + ".jpg");
+            builder3.file(new MockMultipartFile("files", "many-photo-" + i + ".jpg", "image/jpeg", photoData));
+        }
+
+        mockMvc.perform(builder3)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(
+                        org.hamcrest.Matchers.containsString("Cannot add 11 photo(s). Listing already has 0 photo(s) and maximum allowed is 10")));
     }
 
     @Test
@@ -329,6 +367,33 @@ class ListingLifecycleIntegrationTest {
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.message").value(
                         org.hamcrest.Matchers.containsString("Cannot transition from PUBLISHED to PUBLISHED")));
+    }
+
+    @Test
+    @DisplayName("Should handle batch upload with mixed valid and empty files")
+    void shouldHandleBatchUploadWithMixedFiles() throws Exception {
+        UUID listingId = createNewListing();
+
+        byte[] photoData1 = createTestImageData("photo1.jpg");
+        byte[] emptyData = new byte[0];
+        byte[] photoData2 = createTestImageData("photo2.jpg");
+
+        MockMultipartFile photo1 = new MockMultipartFile("files", "photo1.jpg", "image/jpeg", photoData1);
+        MockMultipartFile emptyFile = new MockMultipartFile("files", "empty.jpg", "image/jpeg", emptyData);
+        MockMultipartFile photo2 = new MockMultipartFile("files", "photo2.jpg", "image/jpeg", photoData2);
+
+        // Should skip empty file and upload only valid ones
+        mockMvc.perform(multipart("/listings/{listingId}/photos", listingId)
+                        .file(photo1)
+                        .file(emptyFile)
+                        .file(photo2))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.length()").value(2));
+
+        // Verify only 2 photos uploaded
+        mockMvc.perform(get("/listings/{id}", listingId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.photos.length()").value(2));
     }
 
     // ========== Helper Methods ==========
