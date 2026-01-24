@@ -53,14 +53,14 @@
 
 ### Запуск в Development режимі (H2 Database)
 
+#### Клонувати репозиторій
 ```bash
-# Клонувати репозиторій
 git clone https://github.com/dragster7422/ClassifiedsPlatform.git
 cd ClassifiedsPlatform
 ```
 
+#### Запустити проект
 ```bash
-# Запустити проект
 mvn spring-boot:run -Dspring-boot.run.profiles=dev
 ```
 
@@ -74,11 +74,13 @@ mvn spring-boot:run -Dspring-boot.run.profiles=dev
 
 ### Запуск тестів
 
+#### Всі тести
 ```bash
-# Всі тести
 mvn test
+```
 
-# Тільки integration tests
+#### Тільки integration tests
+```bash
 mvn test -Dtest="*IntegrationTest"
 ```
 
@@ -173,7 +175,7 @@ Response: 200 OK
 
 ### Photos
 
-#### Завантажити фото
+#### Завантажити фото (Для одного оголошення, можна завантажити всього 10 фото у форматі [ jpg, png, webp ])
 ```http
 POST
 http://localhost:8080/listings/{listingId}/photos
@@ -181,7 +183,7 @@ http://localhost:8080/listings/{listingId}/photos
 ```http
 Content-Type: multipart/form-data
 
-file: image.jpg .png .webp
+files: Зображення
 
 Response: 201 Created
 ```
