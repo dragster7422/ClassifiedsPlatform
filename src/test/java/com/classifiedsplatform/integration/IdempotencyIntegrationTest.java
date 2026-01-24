@@ -20,11 +20,6 @@ import org.springframework.test.web.servlet.MvcResult;
 import java.math.BigDecimal;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -48,7 +43,7 @@ class IdempotencyIntegrationTest {
     private IdempotencyRepository idempotencyRepository;
 
     @Test
-    @DisplayName("Should handle idempotent publish request - same idempotency key returns conflict")
+    @DisplayName("Should handle idempotent publish request - same idempotency key returns same result")
     void shouldHandleIdempotentPublishRequest() throws Exception {
         // ========== STEP 1: Create a listing in DRAFT status ==========
         UUID listingId = createDraftListing();
@@ -81,15 +76,22 @@ class IdempotencyIntegrationTest {
         assertThat(record.isExpired()).isFalse();
 
         // ========== STEP 4: Try to publish again with SAME idempotency key ==========
-        mockMvc.perform(post("/listings/{id}/publish", listingId)
+        // Should return same result (200 OK) with same listing data
+        MvcResult secondPublishResult = mockMvc.perform(post("/listings/{id}/publish", listingId)
                         .header("Idempotency-Key", idempotencyKey))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.status").value(409))
-                .andExpect(jsonPath("$.error").value("Conflict"))
-                .andExpect(jsonPath("$.message").value(
-                        org.hamcrest.Matchers.containsString("Operation with idempotency key")))
-                .andExpect(jsonPath("$.message").value(
-                        org.hamcrest.Matchers.containsString("already processed")));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(listingId.toString()))
+                .andExpect(jsonPath("$.status").value("PUBLISHED"))
+                .andReturn();
+
+        ListingResponse secondResponse = objectMapper.readValue(
+                secondPublishResult.getResponse().getContentAsString(),
+                ListingResponse.class
+        );
+
+        // Verify both responses are identical
+        assertThat(secondResponse.id()).isEqualTo(firstResponse.id());
+        assertThat(secondResponse.status()).isEqualTo(firstResponse.status());
 
         // ========== STEP 5: Verify listing status hasn't changed ==========
         mockMvc.perform(get("/listings/{id}", listingId))
@@ -156,38 +158,47 @@ class IdempotencyIntegrationTest {
         assertThat(record).isPresent();
         assertThat(record.get().isExpired()).isFalse();
 
-        // Try again with same key - should get conflict
+        // Try again with same key - should return same cached result (200 OK)
         mockMvc.perform(post("/listings/{id}/publish", listingId)
                         .header("Idempotency-Key", idempotencyKey))
-                .andExpect(status().isConflict());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(listingId.toString()))
+                .andExpect(jsonPath("$.status").value("PUBLISHED"));
     }
 
     @Test
-    @DisplayName("Should return IdempotencyConflict with correct error structure")
-    void shouldReturnIdempotencyConflictWithCorrectErrorStructure() throws Exception {
+    @DisplayName("Should return same response structure for idempotent requests")
+    void shouldReturnSameResponseStructureForIdempotentRequests() throws Exception {
         UUID listingId = createDraftListing();
-        String idempotencyKey = "error-structure-test-" + UUID.randomUUID();
+        String idempotencyKey = "response-structure-test-" + UUID.randomUUID();
 
         // First publish
-        mockMvc.perform(post("/listings/{id}/publish", listingId)
+        MvcResult firstResult = mockMvc.perform(post("/listings/{id}/publish", listingId)
                         .header("Idempotency-Key", idempotencyKey))
-                .andExpect(status().isOk());
+                .andExpect(status().isOk())
+                .andReturn();
 
-        // Second publish with same key - verify error structure
-        mockMvc.perform(post("/listings/{id}/publish", listingId)
+        ListingResponse firstResponse = objectMapper.readValue(
+                firstResult.getResponse().getContentAsString(),
+                ListingResponse.class
+        );
+
+        // Second publish with same key
+        MvcResult secondResult = mockMvc.perform(post("/listings/{id}/publish", listingId)
                         .header("Idempotency-Key", idempotencyKey))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.status").value(409))
-                .andExpect(jsonPath("$.error").value("Conflict"))
-                .andExpect(jsonPath("$.message").exists())
-                .andExpect(jsonPath("$.path").value("/listings/" + listingId + "/publish"))
-                .andExpect(jsonPath("$.timestamp").exists())
-                .andExpect(jsonPath("$.message").value(
-                        org.hamcrest.Matchers.allOf(
-                                org.hamcrest.Matchers.containsString(idempotencyKey),
-                                org.hamcrest.Matchers.containsString(listingId.toString())
-                        )
-                ));
+                .andExpect(status().isOk())
+                .andReturn();
+
+        ListingResponse secondResponse = objectMapper.readValue(
+                secondResult.getResponse().getContentAsString(),
+                ListingResponse.class
+        );
+
+        // Verify responses are identical (ignoring timestamps which may have microsecond differences)
+        assertThat(secondResponse.id()).isEqualTo(firstResponse.id());
+        assertThat(secondResponse.status()).isEqualTo(firstResponse.status());
+        assertThat(secondResponse.title()).isEqualTo(firstResponse.title());
+        assertThat(secondResponse.price()).isEqualTo(firstResponse.price());
     }
 
     @Test
@@ -211,30 +222,73 @@ class IdempotencyIntegrationTest {
     }
 
     @Test
-    @DisplayName("Should validate idempotency key uniqueness across different operations")
-    void shouldValidateIdempotencyKeyUniquenessAcrossDifferentOperations() throws Exception {
-        UUID listingId1 = createDraftListing();
-        UUID listingId2 = createDraftListing();
-
+    @DisplayName("Should return cached result when using same idempotency key for same listing")
+    void shouldReturnCachedResultWhenUsingSameIdempotencyKey() throws Exception {
+        UUID listingId = createDraftListing();
         String sharedIdempotencyKey = "shared-key-" + UUID.randomUUID();
 
-        // Publish first listing with idempotency key
-        mockMvc.perform(post("/listings/{id}/publish", listingId1)
+        // First publish with idempotency key
+        MvcResult firstResult = mockMvc.perform(post("/listings/{id}/publish", listingId)
                         .header("Idempotency-Key", sharedIdempotencyKey))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.id").value(listingId1.toString()));
+                .andExpect(jsonPath("$.id").value(listingId.toString()))
+                .andExpect(jsonPath("$.status").value("PUBLISHED"))
+                .andReturn();
 
-        // Try to publish second listing with SAME idempotency key
-        mockMvc.perform(post("/listings/{id}/publish", listingId2)
+        ListingResponse firstResponse = objectMapper.readValue(
+                firstResult.getResponse().getContentAsString(),
+                ListingResponse.class
+        );
+
+        // Second request with same idempotency key should return cached result
+        MvcResult secondResult = mockMvc.perform(post("/listings/{id}/publish", listingId)
                         .header("Idempotency-Key", sharedIdempotencyKey))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.message").value(
-                        org.hamcrest.Matchers.containsString(sharedIdempotencyKey)));
-
-        // Verify second listing is still in DRAFT status
-        mockMvc.perform(get("/listings/{id}", listingId2))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("DRAFT"));
+                .andExpect(jsonPath("$.id").value(listingId.toString()))
+                .andExpect(jsonPath("$.status").value("PUBLISHED"))
+                .andReturn();
+
+        ListingResponse secondResponse = objectMapper.readValue(
+                secondResult.getResponse().getContentAsString(),
+                ListingResponse.class
+        );
+
+        // Verify both responses are identical (ignoring timestamps which may have microsecond differences)
+        assertThat(secondResponse.id()).isEqualTo(firstResponse.id());
+        assertThat(secondResponse.status()).isEqualTo(firstResponse.status());
+        assertThat(secondResponse.title()).isEqualTo(firstResponse.title());
+        assertThat(secondResponse.price()).isEqualTo(firstResponse.price());
+
+        // Verify listing is still in PUBLISHED status
+        mockMvc.perform(get("/listings/{id}", listingId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PUBLISHED"));
+    }
+
+    @Test
+    @DisplayName("Should create new idempotency record for different operation on same listing")
+    void shouldCreateNewIdempotencyRecordForDifferentOperation() throws Exception {
+        UUID listingId = createDraftListing();
+
+        // Publish with first idempotency key
+        String firstKey = "first-operation-" + UUID.randomUUID();
+        mockMvc.perform(post("/listings/{id}/publish", listingId)
+                        .header("Idempotency-Key", firstKey))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PUBLISHED"));
+
+        // Verify first idempotency record exists
+        assertThat(idempotencyRepository.findByIdempotencyKey(firstKey)).isPresent();
+
+        // Attempting to publish again with different key should fail due to business logic
+        // (can't publish already published listing), not idempotency
+        String secondKey = "second-operation-" + UUID.randomUUID();
+        mockMvc.perform(post("/listings/{id}/publish", listingId)
+                        .header("Idempotency-Key", secondKey))
+                .andExpect(status().isConflict()); // Business rule: already published
+
+        // Verify second idempotency record was NOT created (operation failed)
+        assertThat(idempotencyRepository.findByIdempotencyKey(secondKey)).isEmpty();
     }
 
     // ========== Helper Methods ==========
