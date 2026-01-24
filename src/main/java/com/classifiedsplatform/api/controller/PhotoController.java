@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -30,20 +31,22 @@ public class PhotoController {
     }
 
     @PostMapping
-    public ResponseEntity<PhotoResponse> uploadPhoto(
+    public ResponseEntity<List<PhotoResponse>> uploadPhotos(
             @PathVariable UUID listingId,
-            @RequestParam("file") MultipartFile file
+            @RequestParam("files") MultipartFile[] files
     ) throws IOException {
-        log.debug("Uploading photo for listing: {}, filename: {}", listingId, file.getOriginalFilename());
+        log.debug("Uploading {} photos for listing: {}", files.length, listingId);
 
-        if (file.isEmpty()) {
-            throw new IllegalArgumentException("File cannot be empty");
+        if (files == null || files.length == 0) {
+            throw new IllegalArgumentException("Files list cannot be null or empty");
         }
 
-        UploadListingPhotoCommand command = mapper.toCommand(listingId, file);
-        ListingPhoto photo = uploadListingPhotoUseCase.execute(command);
-        PhotoResponse response = mapper.toResponse(photo);
+        List<UploadListingPhotoCommand> commands = mapper.toCommands(listingId, files);
+        List<ListingPhoto> photos = uploadListingPhotoUseCase.execute(commands);
+        List<PhotoResponse> responses = photos.stream()
+                .map(mapper::toResponse)
+                .toList();
 
-        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+        return ResponseEntity.status(HttpStatus.CREATED).body(responses);
     }
 }
